@@ -6,7 +6,7 @@
  *
  * Compilation : gcc -Wall -Wextra client.c -o client
  * Exécution :   ./client
- */
+ */ 
 
 #include <stdio.h>
 #include <stdlib.h>
