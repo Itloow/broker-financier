@@ -18,6 +18,23 @@
 #define PORT 8080
 #define BUFFER_SIZE 1024
 #define MAX_CLIENTS 10
+#define NB_PRODUITS 5
+
+/* Structure pour un produit financier (pattern typedef struct du TP2) */
+typedef struct {
+    char nom[50];
+    float prix;
+    int quantite;
+} produit_t;
+
+/* Liste des produits disponibles chez le broker */
+produit_t produits[NB_PRODUITS] = {
+    {"Apple",    180.50, 100},
+    {"Google",   140.25, 80},
+    {"Tesla",    250.75, 50},
+    {"Amazon",   185.00, 120},
+    {"Microsoft", 420.30, 90}
+};
 
 /*
  * handle_client - Gère la communication avec un client dans un thread dédié.
@@ -50,10 +67,61 @@ void *handle_client(void *arg) {
             break;
         }
 
-        /* TODO : Traitement des commandes (taches suivantes) */
+        /* Extraire la commande (premier mot) et l'argument */
+        char commande[BUFFER_SIZE] = {0};
+        char argument[BUFFER_SIZE] = {0};
+        int i = 0;
 
-        /* Réponse temporaire : echo */
-        send(client_socket, buffer, strlen(buffer), 0);
+        while (buffer[i] != '\0' && buffer[i] != ' ') {
+            commande[i] = buffer[i];
+            i++;
+        }
+        commande[i] = '\0';
+
+        if (buffer[i] == ' ') {
+            i++;
+            strncpy(argument, buffer + i, BUFFER_SIZE - 1);
+        }
+
+        /* Traitement des commandes */
+        char response[BUFFER_SIZE * 2] = {0};
+
+        if (strcmp(commande, "LIST") == 0) {
+            /* Commande LIST : afficher tous les produits */
+            sprintf(response, "--- Produits disponibles ---\n");
+            for (int j = 0; j < NB_PRODUITS; j++) {
+                char ligne[100] = {0};
+                sprintf(ligne, "%s  |  Prix : %.2f  |  Qte : %d\n",
+                        produits[j].nom, produits[j].prix, produits[j].quantite);
+                strcat(response, ligne);
+            }
+            strcat(response, "----------------------------");
+
+        } else if (strcmp(commande, "INFO") == 0) {
+            /* Commande INFO <produit> : afficher les details d'un produit */
+            if (strlen(argument) == 0) {
+                sprintf(response, "Usage : INFO <nom_produit>");
+            } else {
+                int trouve = 0;
+                for (int j = 0; j < NB_PRODUITS; j++) {
+                    if (strcmp(argument, produits[j].nom) == 0) {
+                        sprintf(response, "Produit : %s\nPrix : %.2f\nQuantite disponible : %d",
+                                produits[j].nom, produits[j].prix, produits[j].quantite);
+                        trouve = 1;
+                        break;
+                    }
+                }
+                if (trouve == 0) {
+                    sprintf(response, "Produit '%s' introuvable.", argument);
+                }
+            }
+
+        } else {
+            /* Commande inconnue */
+            sprintf(response, "Commande inconnue : %s", commande);
+        }
+
+        send(client_socket, response, strlen(response), 0);
     }
 
     /* Fermer le socket du client */
