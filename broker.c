@@ -1,13 +1,3 @@
-/*
- * broker.c - Serveur Broker Financier
- * Projet 1 : Broker financier
- * Licence 3 MIASHS - Programmation systèmes et réseaux
- * Université Toulouse Jean Jaurès - 2025/2026
- *
- * Compilation : gcc -Wall -Wextra broker.c -o broker -lpthread
- * Exécution :   ./broker
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,22 +17,34 @@ typedef struct {
     int quantite;
 } produit_t;
 
+/* Structure pour passer les infos du client au thread
+ * (meme pattern que client_data_t dans serveurc.c du TP2) */
+typedef struct {
+    int socket_fd;
+    struct sockaddr_in client_addr;
+} client_info_t;
+
 /* Liste des produits disponibles chez le broker */
 produit_t produits[NB_PRODUITS] = {
-    {"Apple",    180.50, 100},
-    {"Google",   140.25, 80},
-    {"Tesla",    250.75, 50},
-    {"Amazon",   185.00, 120},
+    {"Apple",     180.50, 100},
+    {"Google",    140.25, 80},
+    {"Tesla",     250.75, 50},
+    {"Amazon",    185.00, 120},
     {"Microsoft", 420.30, 90}
 };
 
 /*
- * handle_client - Gère la communication avec un client dans un thread dédié.
- * Pattern identique à la correction TP1 Q4 (version pthread).
+ * handle_client - Gere la communication avec un client dans un thread dedie.
+ * Recoit un pointeur vers client_info_t contenant le socket ET l'adresse du client.
  */
 void *handle_client(void *arg) {
-    int client_socket = *(int *)arg;
+    client_info_t *info = (client_info_t *)arg;
+    int client_socket = info->socket_fd;
+    char *client_ip = inet_ntoa(info->client_addr.sin_addr);
+    int client_port = ntohs(info->client_addr.sin_port);
     char buffer[BUFFER_SIZE] = {0};
+
+    printf("[LOG] Client connecte : %s:%d\n", client_ip, client_port);
 
     /* Envoyer un message de bienvenue au client */
     char *welcome = "Bienvenue sur le Broker Financier.";
@@ -54,16 +56,27 @@ void *handle_client(void *arg) {
 
         /* Lire le message du client */
         int valread = read(client_socket, buffer, BUFFER_SIZE);
-        if (valread <= 0) {
-            printf("Client deconnecte.\n");
+
+        /* Cas 1 : le client a ferme la connexion proprement (read retourne 0) */
+        if (valread == 0) {
+            printf("[LOG] Client %s:%d a ferme la connexion.\n", client_ip, client_port);
             break;
         }
 
-        printf("Message recu : %s\n", buffer);
+        /* Cas 2 : erreur de lecture sur le socket */
+        if (valread < 0) {
+            perror("[ERREUR] Erreur de lecture");
+            printf("[LOG] Deconnexion inattendue du client %s:%d\n", client_ip, client_port);
+            break;
+        }
 
-        /* Vérifier si le client veut quitter */
+        printf("[LOG] Commande recue de %s:%d : %s\n", client_ip, client_port, buffer);
+
+        /* Cas 3 : le client envoie "exit" pour quitter */
         if (strcmp(buffer, "exit") == 0) {
-            printf("Le client a demande a quitter.\n");
+            printf("[LOG] Client %s:%d a demande a quitter.\n", client_ip, client_port);
+            char *bye = "Deconnexion confirmee. A bientot.";
+            send(client_socket, bye, strlen(bye), 0);
             break;
         }
 
@@ -118,15 +131,16 @@ void *handle_client(void *arg) {
 
         } else {
             /* Commande inconnue */
-            sprintf(response, "Commande inconnue : %s", commande);
+            sprintf(response, "Commande inconnue : %s\nCommandes disponibles : LIST, INFO <produit>", commande);
         }
 
         send(client_socket, response, strlen(response), 0);
     }
 
-    /* Fermer le socket du client */
+    /* Nettoyage : fermer le socket puis liberer la memoire (pattern TP pthread) */
     close(client_socket);
-    free(arg); /* Libérer la mémoire allouée pour le socket */
+    printf("[LOG] Socket du client %s:%d ferme. Thread termine.\n", client_ip, client_port);
+    free(info);
     pthread_exit(NULL);
 }
 
@@ -135,7 +149,7 @@ int main() {
     struct sockaddr_in address;
     int addrlen = sizeof(address);
 
-    /* Création du socket */
+    /* Creation du socket */
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("Erreur socket");
         exit(EXIT_FAILURE);
@@ -152,7 +166,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    /* Écoute des connexions entrantes */
+    /* Ecoute des connexions entrantes */
     if (listen(server_fd, MAX_CLIENTS) < 0) {
         perror("Erreur listen");
         exit(EXIT_FAILURE);
@@ -168,28 +182,26 @@ int main() {
             continue;
         }
 
-        printf("Nouveau client connecte.\n");
-
-        /* Allouer de la mémoire pour le socket du client */
-        int *client_socket = malloc(sizeof(int));
-        if (client_socket == NULL) {
+        /* Allouer la structure client_info_t pour passer au thread */
+        client_info_t *info = malloc(sizeof(client_info_t));
+        if (info == NULL) {
             perror("Erreur malloc");
             close(new_socket);
             continue;
         }
-        *client_socket = new_socket;
+        info->socket_fd = new_socket;
+        info->client_addr = address;
 
-        /* Créer un thread pour gérer le client */
+        /* Creer un thread pour gerer le client */
         pthread_t thread_id;
-        if (pthread_create(&thread_id, NULL, handle_client,
-                           (void *)client_socket) != 0) {
+        if (pthread_create(&thread_id, NULL, handle_client, (void *)info) != 0) {
             perror("Erreur pthread_create");
-            free(client_socket);
+            free(info);
             close(new_socket);
             continue;
         }
 
-        /* Détacher le thread pour qu'il se libère automatiquement */
+        /* Detacher le thread pour qu'il se libere automatiquement */
         pthread_detach(thread_id);
     }
 
