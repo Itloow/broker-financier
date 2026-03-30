@@ -10,21 +10,17 @@
 #define MAX_CLIENTS 10
 #define NB_PRODUITS 5
 
-/* Structure pour un produit financier (pattern typedef struct du TP2) */
 typedef struct {
     char nom[50];
     float prix;
     int quantite;
 } produit_t;
 
-/* Structure pour passer les infos du client au thread
- * (meme pattern que client_data_t dans serveurc.c du TP2) */
 typedef struct {
     int socket_fd;
     struct sockaddr_in client_addr;
 } client_info_t;
 
-/* Liste des produits disponibles chez le broker */
 produit_t produits[NB_PRODUITS] = {
     {"Apple",     180.50, 100},
     {"Google",    140.25, 80},
@@ -33,10 +29,6 @@ produit_t produits[NB_PRODUITS] = {
     {"Microsoft", 420.30, 90}
 };
 
-/*
- * handle_client - Gere la communication avec un client dans un thread dedie.
- * Recoit un pointeur vers client_info_t contenant le socket ET l'adresse du client.
- */
 void *handle_client(void *arg) {
     client_info_t *info = (client_info_t *)arg;
     int client_socket = info->socket_fd;
@@ -46,24 +38,19 @@ void *handle_client(void *arg) {
 
     printf("[LOG] Client connecte : %s:%d\n", client_ip, client_port);
 
-    /* Envoyer un message de bienvenue au client */
     char *welcome = "Bienvenue sur le Broker Financier.";
     send(client_socket, welcome, strlen(welcome), 0);
 
     while (1) {
-        /* Effacer le buffer avant chaque lecture */
         memset(buffer, 0, BUFFER_SIZE);
 
-        /* Lire le message du client */
         int valread = read(client_socket, buffer, BUFFER_SIZE);
 
-        /* Cas 1 : le client a ferme la connexion proprement (read retourne 0) */
         if (valread == 0) {
             printf("[LOG] Client %s:%d a ferme la connexion.\n", client_ip, client_port);
             break;
         }
 
-        /* Cas 2 : erreur de lecture sur le socket */
         if (valread < 0) {
             perror("[ERREUR] Erreur de lecture");
             printf("[LOG] Deconnexion inattendue du client %s:%d\n", client_ip, client_port);
@@ -72,7 +59,6 @@ void *handle_client(void *arg) {
 
         printf("[LOG] Commande recue de %s:%d : %s\n", client_ip, client_port, buffer);
 
-        /* Cas 3 : le client envoie "exit" pour quitter */
         if (strcmp(buffer, "exit") == 0) {
             printf("[LOG] Client %s:%d a demande a quitter.\n", client_ip, client_port);
             char *bye = "Deconnexion confirmee. A bientot.";
@@ -80,7 +66,6 @@ void *handle_client(void *arg) {
             break;
         }
 
-        /* Extraire la commande (premier mot) et l'argument */
         char commande[BUFFER_SIZE] = {0};
         char argument[BUFFER_SIZE] = {0};
         int i = 0;
@@ -96,11 +81,9 @@ void *handle_client(void *arg) {
             strncpy(argument, buffer + i, BUFFER_SIZE - 1);
         }
 
-        /* Traitement des commandes */
         char response[BUFFER_SIZE * 2] = {0};
 
         if (strcmp(commande, "LIST") == 0) {
-            /* Commande LIST : afficher tous les produits */
             sprintf(response, "--- Produits disponibles ---\n");
             for (int j = 0; j < NB_PRODUITS; j++) {
                 char ligne[100] = {0};
@@ -111,7 +94,6 @@ void *handle_client(void *arg) {
             strcat(response, "----------------------------");
 
         } else if (strcmp(commande, "INFO") == 0) {
-            /* Commande INFO <produit> : afficher les details d'un produit */
             if (strlen(argument) == 0) {
                 sprintf(response, "Usage : INFO <nom_produit>");
             } else {
@@ -129,15 +111,76 @@ void *handle_client(void *arg) {
                 }
             }
 
+        } else if (strcmp(commande, "BUY") == 0) {
+            /* Commande BUY <produit> <quantite> : acheter des actions */
+            if (strlen(argument) == 0) {
+                sprintf(response, "Usage : BUY <nom_produit> <quantite>");
+            } else {
+                /* Extraire le nom du produit et la quantite depuis l'argument */
+                char nom_produit[50] = {0};
+                char quantite_str[20] = {0};
+                int k = 0;
+
+                /* Lire le nom du produit (premier mot de l'argument) */
+                while (argument[k] != '\0' && argument[k] != ' ') {
+                    nom_produit[k] = argument[k];
+                    k++;
+                }
+                nom_produit[k] = '\0';
+
+                /* Lire la quantite (deuxieme mot de l'argument) */
+                if (argument[k] == ' ') {
+                    k++;
+                    strncpy(quantite_str, argument + k, 19);
+                }
+
+                /* Verifier que la quantite est fournie */
+                if (strlen(quantite_str) == 0) {
+                    sprintf(response, "Usage : BUY <nom_produit> <quantite>");
+                } else {
+                    int qte = atoi(quantite_str);
+
+                    /* Verifier que la quantite est valide */
+                    if (qte <= 0) {
+                        sprintf(response, "Quantite invalide. Veuillez entrer un nombre superieur a 0.");
+                    } else {
+                        /* Chercher le produit dans la liste */
+                        int trouve = 0;
+                        for (int j = 0; j < NB_PRODUITS; j++) {
+                            if (strcmp(nom_produit, produits[j].nom) == 0) {
+                                trouve = 1;
+                                /* Verifier le stock disponible */
+                                if (qte > produits[j].quantite) {
+                                    sprintf(response, "Stock insuffisant pour '%s'.\nDemande : %d | Disponible : %d",
+                                            produits[j].nom, qte, produits[j].quantite);
+                                } else {
+                                    /* Effectuer l'achat : diminuer le stock du broker */
+                                    produits[j].quantite = produits[j].quantite - qte;
+                                    float cout_total = produits[j].prix * qte;
+
+                                    sprintf(response, "Achat effectue !\nProduit : %s\nQuantite achetee : %d\nPrix unitaire : %.2f\nCout total : %.2f\nStock restant broker : %d",
+                                            produits[j].nom, qte, produits[j].prix, cout_total, produits[j].quantite);
+
+                                    printf("[LOG] %s:%d a achete %d x %s (cout: %.2f)\n",
+                                           client_ip, client_port, qte, produits[j].nom, cout_total);
+                                }
+                                break;
+                            }
+                        }
+                        if (trouve == 0) {
+                            sprintf(response, "Produit '%s' introuvable.", nom_produit);
+                        }
+                    }
+                }
+            }
+
         } else {
-            /* Commande inconnue */
-            sprintf(response, "Commande inconnue : %s\nCommandes disponibles : LIST, INFO <produit>", commande);
+            sprintf(response, "Commande inconnue : %s\nCommandes disponibles : LIST, INFO <produit>, BUY <produit> <quantite>", commande);
         }
 
         send(client_socket, response, strlen(response), 0);
     }
 
-    /* Nettoyage : fermer le socket puis liberer la memoire (pattern TP pthread) */
     close(client_socket);
     printf("[LOG] Socket du client %s:%d ferme. Thread termine.\n", client_ip, client_port);
     free(info);
@@ -149,24 +192,20 @@ int main() {
     struct sockaddr_in address;
     int addrlen = sizeof(address);
 
-    /* Creation du socket */
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("Erreur socket");
         exit(EXIT_FAILURE);
     }
 
-    /* Configuration de l'adresse du serveur */
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = INADDR_ANY;
     address.sin_port = htons(PORT);
 
-    /* Attachement du socket au port */
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         perror("Erreur bind");
         exit(EXIT_FAILURE);
     }
 
-    /* Ecoute des connexions entrantes */
     if (listen(server_fd, MAX_CLIENTS) < 0) {
         perror("Erreur listen");
         exit(EXIT_FAILURE);
@@ -175,14 +214,12 @@ int main() {
     printf("Serveur broker en attente de connexion sur le port %d...\n", PORT);
 
     while (1) {
-        /* Accepter une nouvelle connexion */
         if ((new_socket = accept(server_fd, (struct sockaddr *)&address,
                                  (socklen_t *)&addrlen)) < 0) {
             perror("Erreur accept");
             continue;
         }
 
-        /* Allouer la structure client_info_t pour passer au thread */
         client_info_t *info = malloc(sizeof(client_info_t));
         if (info == NULL) {
             perror("Erreur malloc");
@@ -192,7 +229,6 @@ int main() {
         info->socket_fd = new_socket;
         info->client_addr = address;
 
-        /* Creer un thread pour gerer le client */
         pthread_t thread_id;
         if (pthread_create(&thread_id, NULL, handle_client, (void *)info) != 0) {
             perror("Erreur pthread_create");
@@ -201,7 +237,6 @@ int main() {
             continue;
         }
 
-        /* Detacher le thread pour qu'il se libere automatiquement */
         pthread_detach(thread_id);
     }
 
