@@ -112,49 +112,40 @@ void *handle_client(void *arg) {
             }
 
         } else if (strcmp(commande, "BUY") == 0) {
-            /* Commande BUY <produit> <quantite> : acheter des actions */
             if (strlen(argument) == 0) {
                 sprintf(response, "Usage : BUY <nom_produit> <quantite>");
             } else {
-                /* Extraire le nom du produit et la quantite depuis l'argument */
                 char nom_produit[50] = {0};
                 char quantite_str[20] = {0};
                 int k = 0;
 
-                /* Lire le nom du produit (premier mot de l'argument) */
                 while (argument[k] != '\0' && argument[k] != ' ') {
                     nom_produit[k] = argument[k];
                     k++;
                 }
                 nom_produit[k] = '\0';
 
-                /* Lire la quantite (deuxieme mot de l'argument) */
                 if (argument[k] == ' ') {
                     k++;
                     strncpy(quantite_str, argument + k, 19);
                 }
 
-                /* Verifier que la quantite est fournie */
                 if (strlen(quantite_str) == 0) {
                     sprintf(response, "Usage : BUY <nom_produit> <quantite>");
                 } else {
                     int qte = atoi(quantite_str);
 
-                    /* Verifier que la quantite est valide */
                     if (qte <= 0) {
                         sprintf(response, "Quantite invalide. Veuillez entrer un nombre superieur a 0.");
                     } else {
-                        /* Chercher le produit dans la liste */
                         int trouve = 0;
                         for (int j = 0; j < NB_PRODUITS; j++) {
                             if (strcmp(nom_produit, produits[j].nom) == 0) {
                                 trouve = 1;
-                                /* Verifier le stock disponible */
                                 if (qte > produits[j].quantite) {
                                     sprintf(response, "Stock insuffisant pour '%s'.\nDemande : %d | Disponible : %d",
                                             produits[j].nom, qte, produits[j].quantite);
                                 } else {
-                                    /* Effectuer l'achat : diminuer le stock du broker */
                                     produits[j].quantite = produits[j].quantite - qte;
                                     float cout_total = produits[j].prix * qte;
 
@@ -174,8 +165,59 @@ void *handle_client(void *arg) {
                 }
             }
 
+        } else if (strcmp(commande, "SELL") == 0) {
+            /* Commande SELL <produit> <quantite> : vendre des actions au broker */
+            if (strlen(argument) == 0) {
+                sprintf(response, "Usage : SELL <nom_produit> <quantite>");
+            } else {
+                char nom_produit[50] = {0};
+                char quantite_str[20] = {0};
+                int k = 0;
+
+                while (argument[k] != '\0' && argument[k] != ' ') {
+                    nom_produit[k] = argument[k];
+                    k++;
+                }
+                nom_produit[k] = '\0';
+
+                if (argument[k] == ' ') {
+                    k++;
+                    strncpy(quantite_str, argument + k, 19);
+                }
+
+                if (strlen(quantite_str) == 0) {
+                    sprintf(response, "Usage : SELL <nom_produit> <quantite>");
+                } else {
+                    int qte = atoi(quantite_str);
+
+                    if (qte <= 0) {
+                        sprintf(response, "Quantite invalide. Veuillez entrer un nombre superieur a 0.");
+                    } else {
+                        int trouve = 0;
+                        for (int j = 0; j < NB_PRODUITS; j++) {
+                            if (strcmp(nom_produit, produits[j].nom) == 0) {
+                                trouve = 1;
+                                /* Rachat par le broker : augmenter le stock */
+                                produits[j].quantite = produits[j].quantite + qte;
+                                float gain_total = produits[j].prix * qte;
+
+                                sprintf(response, "Vente effectuee !\nProduit : %s\nQuantite vendue : %d\nPrix unitaire : %.2f\nGain total : %.2f\nStock restant broker : %d",
+                                        produits[j].nom, qte, produits[j].prix, gain_total, produits[j].quantite);
+
+                                printf("[LOG] %s:%d a vendu %d x %s (gain: %.2f)\n",
+                                       client_ip, client_port, qte, produits[j].nom, gain_total);
+                                break;
+                            }
+                        }
+                        if (trouve == 0) {
+                            sprintf(response, "Produit '%s' introuvable.", nom_produit);
+                        }
+                    }
+                }
+            }
+
         } else {
-            sprintf(response, "Commande inconnue : %s\nCommandes disponibles : LIST, INFO <produit>, BUY <produit> <quantite>", commande);
+            sprintf(response, "Commande inconnue : %s\nCommandes disponibles : LIST, INFO <produit>, BUY <produit> <quantite>, SELL <produit> <quantite>", commande);
         }
 
         send(client_socket, response, strlen(response), 0);
