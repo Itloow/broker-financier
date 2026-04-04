@@ -9,12 +9,18 @@
 #define BUFFER_SIZE 1024
 #define MAX_CLIENTS 10
 #define NB_PRODUITS 5
+#define MAX_PORTFOLIO 20
 
 typedef struct {
     char nom[50];
     float prix;
     int quantite;
 } produit_t;
+
+typedef struct {
+    char nom[50];
+    int quantite;
+} portfolio_t;
 
 typedef struct {
     int socket_fd;
@@ -35,6 +41,10 @@ void *handle_client(void *arg) {
     char *client_ip = inet_ntoa(info->client_addr.sin_addr);
     int client_port = ntohs(info->client_addr.sin_port);
     char buffer[BUFFER_SIZE] = {0};
+
+    portfolio_t portefeuille[MAX_PORTFOLIO];
+    int nb_actifs = 0;
+    memset(portefeuille, 0, sizeof(portefeuille));
 
     printf("[LOG] Client connecte : %s:%d\n", client_ip, client_port);
 
@@ -152,6 +162,22 @@ void *handle_client(void *arg) {
                                     sprintf(response, "Achat effectue !\nProduit : %s\nQuantite achetee : %d\nPrix unitaire : %.2f\nCout total : %.2f\nStock restant broker : %d",
                                             produits[j].nom, qte, produits[j].prix, cout_total, produits[j].quantite);
 
+                                    /* Mise a jour du portefeuille cote serveur */
+                                    int found = 0;
+                                    int p;
+                                    for (p = 0; p < nb_actifs; p++) {
+                                        if (strcmp(portefeuille[p].nom, nom_produit) == 0) {
+                                            portefeuille[p].quantite = portefeuille[p].quantite + qte;
+                                            found = 1;
+                                            break;
+                                        }
+                                    }
+                                    if (found == 0 && nb_actifs < MAX_PORTFOLIO) {
+                                        strncpy(portefeuille[nb_actifs].nom, nom_produit, 49);
+                                        portefeuille[nb_actifs].quantite = qte;
+                                        nb_actifs++;
+                                    }
+
                                     printf("[LOG] %s:%d a achete %d x %s (cout: %.2f)\n",
                                            client_ip, client_port, qte, produits[j].nom, cout_total);
                                 }
@@ -166,7 +192,6 @@ void *handle_client(void *arg) {
             }
 
         } else if (strcmp(commande, "SELL") == 0) {
-            /* Commande SELL <produit> <quantite> : vendre des actions au broker */
             if (strlen(argument) == 0) {
                 sprintf(response, "Usage : SELL <nom_produit> <quantite>");
             } else {
@@ -197,15 +222,35 @@ void *handle_client(void *arg) {
                         for (int j = 0; j < NB_PRODUITS; j++) {
                             if (strcmp(nom_produit, produits[j].nom) == 0) {
                                 trouve = 1;
-                                /* Rachat par le broker : augmenter le stock */
-                                produits[j].quantite = produits[j].quantite + qte;
-                                float gain_total = produits[j].prix * qte;
 
-                                sprintf(response, "Vente effectuee !\nProduit : %s\nQuantite vendue : %d\nPrix unitaire : %.2f\nGain total : %.2f\nStock restant broker : %d",
-                                        produits[j].nom, qte, produits[j].prix, gain_total, produits[j].quantite);
+                                /* Verifier que le client possede assez d'actions */
+                                int possede = 0;
+                                int idx_portf = -1;
+                                int p;
+                                for (p = 0; p < nb_actifs; p++) {
+                                    if (strcmp(portefeuille[p].nom, nom_produit) == 0) {
+                                        possede = portefeuille[p].quantite;
+                                        idx_portf = p;
+                                        break;
+                                    }
+                                }
 
-                                printf("[LOG] %s:%d a vendu %d x %s (gain: %.2f)\n",
-                                       client_ip, client_port, qte, produits[j].nom, gain_total);
+                                if (possede < qte) {
+                                    sprintf(response, "Fonds insuffisants pour vendre '%s'.\nDemande : %d | Vous possedez : %d",
+                                            nom_produit, qte, possede);
+                                } else {
+                                    produits[j].quantite = produits[j].quantite + qte;
+                                    float gain_total = produits[j].prix * qte;
+
+                                    /* Mise a jour du portefeuille cote serveur */
+                                    portefeuille[idx_portf].quantite = portefeuille[idx_portf].quantite - qte;
+
+                                    sprintf(response, "Vente effectuee !\nProduit : %s\nQuantite vendue : %d\nPrix unitaire : %.2f\nGain total : %.2f\nStock restant broker : %d",
+                                            produits[j].nom, qte, produits[j].prix, gain_total, produits[j].quantite);
+
+                                    printf("[LOG] %s:%d a vendu %d x %s (gain: %.2f)\n",
+                                           client_ip, client_port, qte, produits[j].nom, gain_total);
+                                }
                                 break;
                             }
                         }
