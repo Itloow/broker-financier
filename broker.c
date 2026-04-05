@@ -11,6 +11,8 @@
 #define NB_PRODUITS 5
 #define MAX_PORTFOLIO 20
 #define LOG_FILE "broker.log"
+#define FONDS_BROKER 50000.00
+#define SOLDE_CLIENT_INITIAL 10000.00
 
 /* les 3 structs du projet */
 
@@ -43,6 +45,9 @@ produit_t produits[NB_PRODUITS] = {
     {"Renault", 203.00, 95},
     {"Orange", 15.60, 180}};
 
+/* fonds du broker pour racheter des actions aux clients */
+float fonds_broker = FONDS_BROKER;
+
 /* log dans la console + dans broker.log en meme temps */
 void ecrire_log(const char *message)
 {
@@ -67,13 +72,14 @@ void *handle_client(void *arg)
     int client_port = ntohs(info->client_addr.sin_port);
     char buffer[BUFFER_SIZE] = {0};
 
-    /* chaque client a son propre portefeuille cote serveur */
+    /* chaque client a son propre portefeuille et solde cote serveur */
     portfolio_t portefeuille[MAX_PORTFOLIO];
     int nb_actifs = 0;
+    float solde_client = SOLDE_CLIENT_INITIAL;
     memset(portefeuille, 0, sizeof(portefeuille));
 
     char log_msg[BUFFER_SIZE * 2] = {0};
-    sprintf(log_msg, "[LOG] Client connecte : %s:%d", client_ip, client_port);
+    sprintf(log_msg, "[LOG] Client connecte : %s:%d (solde: %.2f)", client_ip, client_port, solde_client);
     ecrire_log(log_msg);
 
     /* premier truc qu'on envoie au client */
@@ -247,36 +253,51 @@ void *handle_client(void *arg)
                                 }
                                 else
                                 {
-                                    /* achat ok : on retire du stock broker */
-                                    produits[j].quantite = produits[j].quantite - qte;
                                     float cout_total = produits[j].prix * qte;
 
-                                    sprintf(response, "Achat effectue !\nProduit : %s\nQuantite achetee : %d\nPrix unitaire : %.2f\nCout total : %.2f\nStock restant broker : %d",
-                                            produits[j].nom, qte, produits[j].prix, cout_total, produits[j].quantite);
-
-                                    /* on ajoute au portefeuille du client cote serveur */
-                                    int found = 0;
-                                    int p;
-                                    for (p = 0; p < nb_actifs; p++)
+                                    /* le client a pas assez d'argent */
+                                    if (cout_total > solde_client)
                                     {
-                                        if (strcmp(portefeuille[p].nom, nom_produit) == 0)
+                                        sprintf(response, "Solde insuffisant pour acheter %d x %s.\nCout : %.2f | Votre solde : %.2f",
+                                                qte, produits[j].nom, cout_total, solde_client);
+
+                                        sprintf(log_msg, "[LOG] %s:%d achat refuse : %d x %s (solde insuffisant : %.2f)",
+                                                client_ip, client_port, qte, produits[j].nom, solde_client);
+                                        ecrire_log(log_msg);
+                                    }
+                                    else
+                                    {
+                                        /* achat ok : on retire du stock broker et on debite le client */
+                                        produits[j].quantite = produits[j].quantite - qte;
+                                        solde_client = solde_client - cout_total;
+
+                                        sprintf(response, "Achat effectue !\nProduit : %s\nQuantite achetee : %d\nPrix unitaire : %.2f\nCout total : %.2f\nSolde restant : %.2f\nStock restant broker : %d",
+                                                produits[j].nom, qte, produits[j].prix, cout_total, solde_client, produits[j].quantite);
+
+                                        /* on ajoute au portefeuille du client cote serveur */
+                                        int found = 0;
+                                        int p;
+                                        for (p = 0; p < nb_actifs; p++)
                                         {
-                                            portefeuille[p].quantite = portefeuille[p].quantite + qte;
-                                            found = 1;
-                                            break;
+                                            if (strcmp(portefeuille[p].nom, nom_produit) == 0)
+                                            {
+                                                portefeuille[p].quantite = portefeuille[p].quantite + qte;
+                                                found = 1;
+                                                break;
+                                            }
                                         }
-                                    }
-                                    /* produit pas encore dans le portefeuille, on le cree */
-                                    if (found == 0 && nb_actifs < MAX_PORTFOLIO)
-                                    {
-                                        strncpy(portefeuille[nb_actifs].nom, nom_produit, 49);
-                                        portefeuille[nb_actifs].quantite = qte;
-                                        nb_actifs++;
-                                    }
+                                        /* produit pas encore dans le portefeuille, on le cree */
+                                        if (found == 0 && nb_actifs < MAX_PORTFOLIO)
+                                        {
+                                            strncpy(portefeuille[nb_actifs].nom, nom_produit, 49);
+                                            portefeuille[nb_actifs].quantite = qte;
+                                            nb_actifs++;
+                                        }
 
-                                    sprintf(log_msg, "[LOG] %s:%d a achete %d x %s (cout: %.2f)",
-                                            client_ip, client_port, qte, produits[j].nom, cout_total);
-                                    ecrire_log(log_msg);
+                                        sprintf(log_msg, "[LOG] %s:%d a achete %d x %s (cout: %.2f | solde restant: %.2f)",
+                                                client_ip, client_port, qte, produits[j].nom, cout_total, solde_client);
+                                        ecrire_log(log_msg);
+                                    }
                                 }
                                 break;
                             }
@@ -363,19 +384,38 @@ void *handle_client(void *arg)
                                 }
                                 else
                                 {
-                                    /* vente ok : on remet dans le stock broker */
-                                    produits[j].quantite = produits[j].quantite + qte;
-                                    float gain_total = produits[j].prix * qte;
+                                    float cout_total = produits[j].prix * qte;
 
-                                    /* on retire du portefeuille du client */
-                                    portefeuille[idx_portf].quantite = portefeuille[idx_portf].quantite - qte;
+                                    /* le broker a pas assez d'argent pour racheter */
+                                    if (cout_total > fonds_broker)
+                                    {
+                                        sprintf(response, "Le broker n'a pas assez de fonds pour racheter %d x %s.\nCout : %.2f | Fonds broker : %.2f",
+                                                qte, nom_produit, cout_total, fonds_broker);
 
-                                    sprintf(response, "Vente effectuee !\nProduit : %s\nQuantite vendue : %d\nPrix unitaire : %.2f\nGain total : %.2f\nStock restant broker : %d",
-                                            produits[j].nom, qte, produits[j].prix, gain_total, produits[j].quantite);
+                                        sprintf(log_msg, "[LOG] %s:%d vente refusee : %d x %s (fonds broker insuffisants : %.2f)",
+                                                client_ip, client_port, qte, nom_produit, fonds_broker);
+                                        ecrire_log(log_msg);
+                                    }
+                                    else
+                                    {
+                                        /* vente ok : on remet dans le stock broker */
+                                        produits[j].quantite = produits[j].quantite + qte;
+                                        float gain_total = produits[j].prix * qte;
 
-                                    sprintf(log_msg, "[LOG] %s:%d a vendu %d x %s (gain: %.2f)",
-                                            client_ip, client_port, qte, produits[j].nom, gain_total);
-                                    ecrire_log(log_msg);
+                                        /* on debite les fonds du broker et on credite le client */
+                                        fonds_broker = fonds_broker - gain_total;
+                                        solde_client = solde_client + gain_total;
+
+                                        /* on retire du portefeuille du client */
+                                        portefeuille[idx_portf].quantite = portefeuille[idx_portf].quantite - qte;
+
+                                        sprintf(response, "Vente effectuee !\nProduit : %s\nQuantite vendue : %d\nPrix unitaire : %.2f\nGain total : %.2f\nSolde restant : %.2f\nStock restant broker : %d",
+                                                produits[j].nom, qte, produits[j].prix, gain_total, solde_client, produits[j].quantite);
+
+                                        sprintf(log_msg, "[LOG] %s:%d a vendu %d x %s (gain: %.2f | solde client: %.2f | fonds broker: %.2f)",
+                                                client_ip, client_port, qte, produits[j].nom, gain_total, solde_client, fonds_broker);
+                                        ecrire_log(log_msg);
+                                    }
                                 }
                                 break;
                             }
@@ -447,7 +487,7 @@ int main()
     }
 
     char log_msg[BUFFER_SIZE * 2] = {0};
-    sprintf(log_msg, "[LOG] Serveur broker demarre sur le port %d", PORT);
+    sprintf(log_msg, "[LOG] Serveur broker demarre sur le port %d (fonds: %.2f)", PORT, fonds_broker);
     ecrire_log(log_msg);
 
     /* boucle infinie : on accepte les clients un par un */
