@@ -10,6 +10,7 @@
 #define MAX_CLIENTS 10
 #define NB_PRODUITS 5
 #define MAX_PORTFOLIO 20
+#define LOG_FILE "broker.log"
 
 typedef struct {
     char nom[50];
@@ -17,6 +18,7 @@ typedef struct {
     int quantite;
 } produit_t;
 
+/* structure pour le portefeuille cote serveur, on suit ce que chaque client possede */
 typedef struct {
     char nom[50];
     int quantite;
@@ -35,6 +37,22 @@ produit_t produits[NB_PRODUITS] = {
     {"Microsoft", 420.30, 90}
 };
 
+/* fonction de log : ecrit dans la console ET dans le fichier broker.log */
+/* comme ca on a un historique complet de tout ce qui se passe sur le serveur */
+void ecrire_log(const char *message) {
+    /* affichage console comme avant */
+    printf("%s\n", message);
+
+    /* ecriture dans le fichier en mode ajout */
+    FILE *f = fopen(LOG_FILE, "a");
+    if (f == NULL) {
+        perror("[ERREUR] Impossible d'ouvrir le fichier de log");
+        return;
+    }
+    fprintf(f, "%s\n", message);
+    fclose(f);
+}
+
 void *handle_client(void *arg) {
     client_info_t *info = (client_info_t *)arg;
     int client_socket = info->socket_fd;
@@ -42,11 +60,15 @@ void *handle_client(void *arg) {
     int client_port = ntohs(info->client_addr.sin_port);
     char buffer[BUFFER_SIZE] = {0};
 
+    /* portefeuille du client cote serveur pour verifier les ventes */
     portfolio_t portefeuille[MAX_PORTFOLIO];
     int nb_actifs = 0;
     memset(portefeuille, 0, sizeof(portefeuille));
 
-    printf("[LOG] Client connecte : %s:%d\n", client_ip, client_port);
+    /* on log la connexion du client */
+    char log_msg[BUFFER_SIZE * 2] = {0};
+    sprintf(log_msg, "[LOG] Client connecte : %s:%d", client_ip, client_port);
+    ecrire_log(log_msg);
 
     char *welcome = "Bienvenue sur le Broker Financier.";
     send(client_socket, welcome, strlen(welcome), 0);
@@ -57,20 +79,25 @@ void *handle_client(void *arg) {
         int valread = read(client_socket, buffer, BUFFER_SIZE);
 
         if (valread == 0) {
-            printf("[LOG] Client %s:%d a ferme la connexion.\n", client_ip, client_port);
+            sprintf(log_msg, "[LOG] Client %s:%d a ferme la connexion.", client_ip, client_port);
+            ecrire_log(log_msg);
             break;
         }
 
         if (valread < 0) {
             perror("[ERREUR] Erreur de lecture");
-            printf("[LOG] Deconnexion inattendue du client %s:%d\n", client_ip, client_port);
+            sprintf(log_msg, "[LOG] Deconnexion inattendue du client %s:%d", client_ip, client_port);
+            ecrire_log(log_msg);
             break;
         }
 
-        printf("[LOG] Commande recue de %s:%d : %s\n", client_ip, client_port, buffer);
+        /* on log chaque commande recue */
+        sprintf(log_msg, "[LOG] Commande recue de %s:%d : %s", client_ip, client_port, buffer);
+        ecrire_log(log_msg);
 
         if (strcmp(buffer, "exit") == 0) {
-            printf("[LOG] Client %s:%d a demande a quitter.\n", client_ip, client_port);
+            sprintf(log_msg, "[LOG] Client %s:%d a demande a quitter.", client_ip, client_port);
+            ecrire_log(log_msg);
             char *bye = "Deconnexion confirmee. A bientot.";
             send(client_socket, bye, strlen(bye), 0);
             break;
@@ -155,6 +182,11 @@ void *handle_client(void *arg) {
                                 if (qte > produits[j].quantite) {
                                     sprintf(response, "Stock insuffisant pour '%s'.\nDemande : %d | Disponible : %d",
                                             produits[j].nom, qte, produits[j].quantite);
+
+                                    /* on log le refus d'achat */
+                                    sprintf(log_msg, "[LOG] %s:%d achat refuse : %d x %s (stock insuffisant)",
+                                            client_ip, client_port, qte, produits[j].nom);
+                                    ecrire_log(log_msg);
                                 } else {
                                     produits[j].quantite = produits[j].quantite - qte;
                                     float cout_total = produits[j].prix * qte;
@@ -162,7 +194,7 @@ void *handle_client(void *arg) {
                                     sprintf(response, "Achat effectue !\nProduit : %s\nQuantite achetee : %d\nPrix unitaire : %.2f\nCout total : %.2f\nStock restant broker : %d",
                                             produits[j].nom, qte, produits[j].prix, cout_total, produits[j].quantite);
 
-                                    /* Mise a jour du portefeuille cote serveur */
+                                    /* mise a jour du portefeuille serveur */
                                     int found = 0;
                                     int p;
                                     for (p = 0; p < nb_actifs; p++) {
@@ -178,8 +210,10 @@ void *handle_client(void *arg) {
                                         nb_actifs++;
                                     }
 
-                                    printf("[LOG] %s:%d a achete %d x %s (cout: %.2f)\n",
-                                           client_ip, client_port, qte, produits[j].nom, cout_total);
+                                    /* on log l'achat reussi */
+                                    sprintf(log_msg, "[LOG] %s:%d a achete %d x %s (cout: %.2f)",
+                                            client_ip, client_port, qte, produits[j].nom, cout_total);
+                                    ecrire_log(log_msg);
                                 }
                                 break;
                             }
@@ -223,7 +257,7 @@ void *handle_client(void *arg) {
                             if (strcmp(nom_produit, produits[j].nom) == 0) {
                                 trouve = 1;
 
-                                /* Verifier que le client possede assez d'actions */
+                                /* on verifie que le client possede assez d'actions */
                                 int possede = 0;
                                 int idx_portf = -1;
                                 int p;
@@ -238,18 +272,25 @@ void *handle_client(void *arg) {
                                 if (possede < qte) {
                                     sprintf(response, "Fonds insuffisants pour vendre '%s'.\nDemande : %d | Vous possedez : %d",
                                             nom_produit, qte, possede);
+
+                                    /* on log le refus de vente */
+                                    sprintf(log_msg, "[LOG] %s:%d vente refusee : %d x %s (possede: %d)",
+                                            client_ip, client_port, qte, nom_produit, possede);
+                                    ecrire_log(log_msg);
                                 } else {
                                     produits[j].quantite = produits[j].quantite + qte;
                                     float gain_total = produits[j].prix * qte;
 
-                                    /* Mise a jour du portefeuille cote serveur */
+                                    /* on met a jour le portefeuille serveur */
                                     portefeuille[idx_portf].quantite = portefeuille[idx_portf].quantite - qte;
 
                                     sprintf(response, "Vente effectuee !\nProduit : %s\nQuantite vendue : %d\nPrix unitaire : %.2f\nGain total : %.2f\nStock restant broker : %d",
                                             produits[j].nom, qte, produits[j].prix, gain_total, produits[j].quantite);
 
-                                    printf("[LOG] %s:%d a vendu %d x %s (gain: %.2f)\n",
-                                           client_ip, client_port, qte, produits[j].nom, gain_total);
+                                    /* on log la vente reussie */
+                                    sprintf(log_msg, "[LOG] %s:%d a vendu %d x %s (gain: %.2f)",
+                                            client_ip, client_port, qte, produits[j].nom, gain_total);
+                                    ecrire_log(log_msg);
                                 }
                                 break;
                             }
@@ -263,13 +304,18 @@ void *handle_client(void *arg) {
 
         } else {
             sprintf(response, "Commande inconnue : %s\nCommandes disponibles : LIST, INFO <produit>, BUY <produit> <quantite>, SELL <produit> <quantite>", commande);
+
+            /* on log les commandes inconnues aussi, ca peut etre utile */
+            sprintf(log_msg, "[LOG] %s:%d commande inconnue : %s", client_ip, client_port, commande);
+            ecrire_log(log_msg);
         }
 
         send(client_socket, response, strlen(response), 0);
     }
 
     close(client_socket);
-    printf("[LOG] Socket du client %s:%d ferme. Thread termine.\n", client_ip, client_port);
+    sprintf(log_msg, "[LOG] Socket du client %s:%d ferme. Thread termine.", client_ip, client_port);
+    ecrire_log(log_msg);
     free(info);
     pthread_exit(NULL);
 }
@@ -298,7 +344,10 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("Serveur broker en attente de connexion sur le port %d...\n", PORT);
+    /* on log le demarrage du serveur */
+    char log_msg[BUFFER_SIZE * 2] = {0};
+    sprintf(log_msg, "[LOG] Serveur broker demarre sur le port %d", PORT);
+    ecrire_log(log_msg);
 
     while (1) {
         if ((new_socket = accept(server_fd, (struct sockaddr *)&address,
