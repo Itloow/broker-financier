@@ -9,13 +9,13 @@
 #define BUFFER_SIZE 1024
 #define MAX_PORTFOLIO 20
 
-/* structure pour stocker un actif dans le portefeuille du client */
+/* un actif dans le portefeuille */
 typedef struct {
     char nom[50];
     int quantite;
 } portfolio_t;
 
-/* portefeuille local du client, on garde tout en memoire */
+/* le portefeuille du client, stocke en local */
 portfolio_t portefeuille[MAX_PORTFOLIO];
 int nb_actifs = 0;
 
@@ -24,7 +24,7 @@ int main() {
     struct sockaddr_in serv_addr;
     char buffer[BUFFER_SIZE] = {0};
 
-    /* on cree le socket TCP */
+    /* creation du socket tcp */
     if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Erreur socket");
         exit(EXIT_FAILURE);
@@ -33,14 +33,14 @@ int main() {
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(PORT);
 
-    /* on convertit l'IP en binaire */
+    /* conversion de l'ip */
     if (inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr) <= 0) {
         perror("Adresse invalide");
         close(sock);
         exit(EXIT_FAILURE);
     }
 
-    /* connexion au serveur */
+    /* on se connecte */
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("Echec de la connexion");
         close(sock);
@@ -49,10 +49,11 @@ int main() {
 
     printf("Connecte au broker.\n");
 
-    /* on recoit le message de bienvenue */
+    /* message de bienvenue */
     memset(buffer, 0, BUFFER_SIZE);
-    int valread = read(sock, buffer, BUFFER_SIZE);
+    int valread = read(sock, buffer, BUFFER_SIZE - 1);
     if (valread > 0) {
+        buffer[valread] = '\0';
         printf("%s\n", buffer);
     } else {
         printf("Impossible de recevoir le message de bienvenue.\n");
@@ -64,15 +65,20 @@ int main() {
 
     while (1) {
         printf("Commande > ");
-        fgets(buffer, BUFFER_SIZE, stdin);
+
+        /* si fgets retourne NULL = ctrl+d ou erreur, on quitte */
+        if (fgets(buffer, BUFFER_SIZE, stdin) == NULL) {
+            printf("\nFin de saisie, deconnexion.\n");
+            break;
+        }
         buffer[strcspn(buffer, "\n")] = 0;
 
-        /* on ignore si l'utilisateur appuie juste sur entree */
+        /* rien tape, on skip */
         if (strlen(buffer) == 0) {
             continue;
         }
 
-        /* commande WALLET : on affiche le portefeuille local sans passer par le serveur */
+        /* wallet = affichage local, pas besoin du serveur */
         if (strcmp(buffer, "WALLET") == 0) {
             if (nb_actifs == 0) {
                 printf("Portefeuille vide.\n");
@@ -88,24 +94,24 @@ int main() {
             continue;
         }
 
-        /* on sauvegarde la commande avant de l'envoyer, on en aura besoin apres */
+        /* on garde la commande de cote pour apres */
         char cmd_save[BUFFER_SIZE] = {0};
         strncpy(cmd_save, buffer, BUFFER_SIZE - 1);
 
-        /* --- extraction de la commande et des arguments pour les verifications locales --- */
+        /* on decoupe en 3 : commande, produit, quantite */
         char cmd[BUFFER_SIZE] = {0};
         char arg_produit[50] = {0};
         char arg_qte_str[20] = {0};
         int i = 0;
 
-        /* premier mot = la commande (BUY, SELL, LIST, etc.) */
+        /* 1er mot */
         while (cmd_save[i] != '\0' && cmd_save[i] != ' ') {
             cmd[i] = cmd_save[i];
             i++;
         }
         cmd[i] = '\0';
 
-        /* deuxieme mot = le nom du produit */
+        /* 2eme mot */
         if (cmd_save[i] == ' ') {
             i++;
             int p = 0;
@@ -117,43 +123,38 @@ int main() {
             arg_produit[p] = '\0';
         }
 
-        /* troisieme mot = la quantite */
+        /* 3eme mot */
         if (cmd_save[i] == ' ') {
             i++;
             strncpy(arg_qte_str, cmd_save + i, 19);
         }
 
-        /* ============================================================ */
-        /* VERIFICATIONS COTE CLIENT AVANT ENVOI (tache 14)             */
-        /* on verifie localement pour eviter d'envoyer des commandes    */
-        /* qu'on sait deja invalides, ca evite de surcharger le serveur */
-        /* ============================================================ */
+        /* --- verifs avant d'envoyer --- */
 
-        /* pour BUY et SELL : on verifie que la quantite est valide */
         if (strcmp(cmd, "BUY") == 0 || strcmp(cmd, "SELL") == 0) {
 
-            /* verif : il faut un nom de produit */
+            /* pas de produit */
             if (strlen(arg_produit) == 0) {
                 printf("Erreur : il manque le nom du produit.\n");
                 printf("Usage : %s <produit> <quantite>\n", cmd);
                 continue;
             }
 
-            /* verif : il faut une quantite */
+            /* pas de quantite */
             if (strlen(arg_qte_str) == 0) {
                 printf("Erreur : il manque la quantite.\n");
                 printf("Usage : %s <produit> <quantite>\n", cmd);
                 continue;
             }
 
-            /* verif : la quantite doit etre un nombre > 0 */
+            /* quantite negative ou nulle */
             int qte_check = atoi(arg_qte_str);
             if (qte_check <= 0) {
                 printf("Erreur : la quantite doit etre superieure a 0.\n");
                 continue;
             }
 
-            /* verif specifique au SELL : on check si on possede assez d'actions */
+            /* pour sell on check le portefeuille */
             if (strcmp(cmd, "SELL") == 0) {
                 int possede = 0;
                 int j;
@@ -171,35 +172,35 @@ int main() {
             }
         }
 
-        /* verif pour INFO : il faut un nom de produit */
+        /* info sans produit */
         if (strcmp(cmd, "INFO") == 0 && strlen(arg_produit) == 0) {
             printf("Erreur : il manque le nom du produit.\n");
             printf("Usage : INFO <produit>\n");
             continue;
         }
 
-        /* ============================================================ */
-        /* FIN DES VERIFICATIONS LOCALES                                */
-        /* si on arrive ici, la commande est valide, on l'envoie       */
-        /* ============================================================ */
+        /* c'est bon, on envoie */
+        if (send(sock, buffer, strlen(buffer), 0) < 0) {
+            perror("Erreur envoi");
+            printf("Impossible d'envoyer la commande, deconnexion.\n");
+            break;
+        }
 
-        /* envoi de la commande au serveur */
-        send(sock, buffer, strlen(buffer), 0);
-
-        /* si c'est exit, on attend la confirmation et on quitte */
+        /* exit */
         if (strcmp(buffer, "exit") == 0) {
             memset(buffer, 0, BUFFER_SIZE);
-            valread = read(sock, buffer, BUFFER_SIZE);
+            valread = read(sock, buffer, BUFFER_SIZE - 1);
             if (valread > 0) {
+                buffer[valread] = '\0';
                 printf("%s\n", buffer);
             }
             printf("Deconnexion du broker.\n");
             break;
         }
 
-        /* on lit la reponse du serveur */
+        /* reponse du serveur */
         memset(buffer, 0, BUFFER_SIZE);
-        valread = read(sock, buffer, BUFFER_SIZE);
+        valread = read(sock, buffer, BUFFER_SIZE - 1);
 
         if (valread == 0) {
             printf("Le serveur a ferme la connexion.\n");
@@ -212,11 +213,12 @@ int main() {
             break;
         }
 
+        /* on termine la chaine proprement */
+        buffer[valread] = '\0';
+
         printf("%s\n", buffer);
 
-        /* === mise a jour du portefeuille local apres reponse du serveur === */
-
-        /* si c'est un BUY reussi (la reponse commence par "Achat") on ajoute au portefeuille */
+        /* buy reussi -> on ajoute au portefeuille */
         if (strcmp(cmd, "BUY") == 0 && strlen(arg_produit) > 0
             && strlen(arg_qte_str) > 0
             && buffer[0] == 'A' && buffer[1] == 'c' && buffer[2] == 'h'
@@ -238,7 +240,7 @@ int main() {
             }
         }
 
-        /* si c'est un SELL reussi (la reponse commence par "Vente") on retire du portefeuille */
+        /* sell reussi -> on retire du portefeuille */
         if (strcmp(cmd, "SELL") == 0 && strlen(arg_produit) > 0
             && strlen(arg_qte_str) > 0
             && buffer[0] == 'V' && buffer[1] == 'e' && buffer[2] == 'n'
@@ -254,7 +256,6 @@ int main() {
         }
     }
 
-    /* on ferme le socket proprement */
     close(sock);
 
     return 0;
